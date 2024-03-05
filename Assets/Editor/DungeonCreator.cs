@@ -5,12 +5,35 @@ using UnityEditor;
 using System.Linq;
 using Codice.Client.BaseCommands;
 using Unity.VisualScripting;
+using System.Security.Policy;
+using UnityEditor.EditorTools;
 
 
 public class DungeonCreator : EditorWindow
 {
     [MenuItem("Tools/DungeonCreator")]
     public static void OpenWindow() => GetWindow(typeof(DungeonCreator));
+
+    private List<GameObject> placedRooms = new();
+    //The room we are placing
+    private GameObject _roomToPlace;
+    public GameObject RoomToPlace
+    {
+        set
+        {
+            if (value != null && !value.CompareTag("Room")) return;
+
+            _roomToPlace = value;
+        }
+        get
+        {
+            return _roomToPlace;
+        }
+    }
+
+
+    //The position where a room is placed on spawn
+    private readonly Vector3 spawnPosition = new(0, 0, 40);
 
     //SerializedThings
     private SerializedObject so;
@@ -19,12 +42,13 @@ public class DungeonCreator : EditorWindow
     const float gridExtent = 32;
 
     //Variables
-    private GameObject[] rooms;
+    private GameObject[] roomPrefabs;
     private void OnEnable()
     {
         //Events
         SceneView.duringSceneGui += DuringSceneGUI;
-        Selection.selectionChanged += Repaint;
+        Selection.selectionChanged += () => RoomToPlace = Selection.activeGameObject;
+        EditorApplication.hierarchyChanged += SetupList;
 
         //Serialize
         so = new SerializedObject(this);
@@ -32,18 +56,27 @@ public class DungeonCreator : EditorWindow
         //Prendiamo il percorso in cui sono messi i prefab e li salviamo in un array.
         string[] guids = AssetDatabase.FindAssets("t:prefab", new[] { "Assets/Prefabs/Rooms" }); //Cerchiamo la cartella e il tipo dei file tramite il filtro t:prefab
         IEnumerable<string> paths = guids.Select(AssetDatabase.GUIDToAssetPath);
-        rooms = paths.Select(AssetDatabase.LoadAssetAtPath<GameObject>).ToArray();
+        roomPrefabs = paths.Select(AssetDatabase.LoadAssetAtPath<GameObject>).ToArray();
 
         //Prendiamo i valori salvati se ce ne sono.
         //FIXME: Tengo come esempio toglila dopo
         //gridSize = EditorPrefs.GetInt("dungeonCreator_gridSize", 10);
+
+        //Ci prediamo tutte le stanze già piazzate
+        SetupList();
+    }
+
+    private void SetupList()
+    {
+        placedRooms = GameObject.FindGameObjectsWithTag("Room").ToList();
     }
 
     private void OnDisable()
     {
         //Events
         SceneView.duringSceneGui -= DuringSceneGUI;
-        Selection.selectionChanged -= Repaint;
+        Selection.selectionChanged -= () => RoomToPlace = Selection.activeGameObject;
+        EditorApplication.hierarchyChanged -= SetupList;
 
 
         //Salviamo le impostazioni così che quando la window verrà aperta avremo tutto come prima
@@ -68,7 +101,9 @@ public class DungeonCreator : EditorWindow
     //Cosa succede nella scena
     private void DuringSceneGUI(SceneView sceneView)
     {
-        GameObject selectedRoom = DrawRoomSelectionGUI();
+        Debug.Log(RoomToPlace);
+
+        DrawRoomSelectionGUI();
 
         //Qualsiasi cosa che deve accadere ad ogni repaint.
         if (Event.current.type == EventType.Repaint)
@@ -78,18 +113,25 @@ public class DungeonCreator : EditorWindow
 
         if (Event.current.type == EventType.MouseUp)
         {
+            //FIXME: Troviamo un modo per non usare i tag? una tag class maybe?
             if (Selection.activeGameObject != null && Selection.activeGameObject.CompareTag("Room"))
             {
-                GameObject room = Selection.activeGameObject;
-
                 //Reset dell'asse delle Y
-                Vector3 roomPos = room.transform.position;
+                Vector3 roomPos = RoomToPlace.transform.position;
+                //All on the same height
                 roomPos.y = 0;
 
                 //Snap
                 roomPos = Round(roomPos);
-
-                room.transform.SetPositionAndRotation(roomPos, Quaternion.identity);
+                if (CanPlace(roomPos))
+                {
+                    RoomToPlace.transform.SetPositionAndRotation(roomPos, Quaternion.identity);
+                    placedRooms.Add(RoomToPlace);
+                }
+                else
+                {
+                    RoomToPlace.transform.SetPositionAndRotation(spawnPosition, Quaternion.identity);
+                }
             }
         }
 
@@ -99,25 +141,44 @@ public class DungeonCreator : EditorWindow
         }
     }
 
-    private GameObject DrawRoomSelectionGUI()
+    private bool CanPlace(Vector3 snappedPos)
     {
-        GameObject spawnedRoom = null;
+        if (snappedPos.x < -30 || snappedPos.x > 30) return false;
+        if (snappedPos.z < -30 || snappedPos.z > 30) return false;
 
+        if (placedRooms.Count <= 0) return true;
+
+        foreach (GameObject room in placedRooms)
+        {
+            if (room.transform.position == snappedPos)
+                return false;
+        }
+        return true;
+    }
+
+    private void DrawRoomSelectionGUI()
+    {
         Handles.BeginGUI(); //Start 2d block GUI in scene view
 
         Vector2 rectSize = SceneView.lastActiveSceneView.camera.pixelRect.center;
-        Rect rect = new(rectSize.x - rooms.Length / 2 * 60, 10, 60, 60);
+        Rect rect = new(rectSize.x - roomPrefabs.Length / 2 * 60, 10, 60, 60);
 
-        for (int i = 0; i < rooms.Length; i++)
+        for (int i = 0; i < roomPrefabs.Length; i++)
         {
-            GameObject prefab = rooms[i];
+            GameObject prefab = roomPrefabs[i];
             EditorGUILayout.BeginVertical();
             Texture icon = AssetPreview.GetAssetPreview(prefab);
 
             if (GUI.Button(rect, new GUIContent(icon)))
             {
-                spawnedRoom = SpawnRoom(prefab);
-                Selection.activeGameObject = spawnedRoom;
+                //If we're placing a new room this will be replaced with the new choice
+                // if(roomToPlace) Destroy(roomToPlace);
+
+                if (_roomToPlace != null && _roomToPlace.transform.position == spawnPosition)
+                    DestroyImmediate(_roomToPlace);
+
+                RoomToPlace = SpawnRoom(prefab);
+                Selection.activeGameObject = RoomToPlace;
             }
 
             EditorGUILayout.EndVertical();
@@ -126,8 +187,6 @@ public class DungeonCreator : EditorWindow
         }
 
         Handles.EndGUI();
-
-        return spawnedRoom;
     }
 
     private Vector3 Round(Vector3 v)
@@ -141,10 +200,13 @@ public class DungeonCreator : EditorWindow
         return v * gridSize;
     }
 
+    //FIXME: Static?
     private GameObject SpawnRoom(GameObject room)
     {
         GameObject spawnedRoom = (GameObject)PrefabUtility.InstantiatePrefab(room);
+        spawnedRoom.transform.position = spawnPosition;
         Undo.RegisterCreatedObjectUndo(spawnedRoom, "Room Spawn");
+
         return spawnedRoom;
     }
 
@@ -178,7 +240,7 @@ public class DungeonCreator : EditorWindow
 
             Handles.DrawAAPolyLine(p2, p3);
         }
-        
+
         /*
         // Di quante linee avremo bisogno per formare una griglia?
         int lineCount = Mathf.RoundToInt((gridExtent * 2) / gridSize);
