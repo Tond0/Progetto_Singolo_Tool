@@ -150,6 +150,7 @@ public class DungeonCreator : EditorWindow
 
         foreach (GameObject room in placedRooms)
         {
+            if(room == RoomToPlace) continue;
             if (room.transform.position == snappedPos)
                 return false;
         }
