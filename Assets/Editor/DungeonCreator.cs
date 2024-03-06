@@ -125,7 +125,15 @@ public class DungeonCreator : EditorWindow
                 roomPos = Round(roomPos);
                 if (CanPlace(roomPos))
                 {
-                    RoomToPlace.transform.SetPositionAndRotation(roomPos, Quaternion.identity);
+                    Vector3 currentRot = RoomToPlace.transform.eulerAngles;
+
+                    float xRotation = 0;
+                    float yRotation = Mathf.Round(currentRot.y / 90) * 90;
+                    float zRotation = 0;
+                    
+                    Quaternion snappedRot = Quaternion.Euler(xRotation, yRotation, zRotation);
+
+                    RoomToPlace.transform.SetPositionAndRotation(roomPos, snappedRot);
                     placedRooms.Add(RoomToPlace);
                 }
                 else
@@ -150,7 +158,8 @@ public class DungeonCreator : EditorWindow
 
         foreach (GameObject room in placedRooms)
         {
-            if(room == RoomToPlace) continue;
+            if (room == RoomToPlace) continue;
+
             if (room.transform.position == snappedPos)
                 return false;
         }
